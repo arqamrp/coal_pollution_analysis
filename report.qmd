@@ -1,0 +1,279 @@
+---
+title: "Time Series Analysis of Coalfield Pollutant Data"
+author: "Arqam Patel"
+format: pdf
+editor: visual
+---
+
+```{r}
+#| echo: false
+#| output: false
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+library(ggplot2)
+library(ggcorrplot)
+library(lubridate)
+library(imputeTS)
+library(tseries)
+```
+
+# Introduction
+
+Due to the number of variables we're dealing with simultaneously, a majority of the analysis was done with the help of this [dashboard app](https://arqam.shinyapps.io/tseries/) that I coded from scratch using an R library called RShiny.
+
+# Dataset description
+
+The given dataset contains 8640 observations each of the levels of 10 pollutants, taken at intervals of 15 minutes from 1 February to 2 May 2023 (i.e. 90 days, 96 observations each).
+
+```{r}
+#| output: false
+#| echo: false
+
+data <- as.data.frame(read.csv("/Users/arqam/projects/coal_pollution_analysis/dataset.csv"))
+
+series <- data[1:8640, c(2,4:13)]
+colnames(series) <- c("DateTime","PM10", "PM2.5", "NO", "NO2", "NOx", "CO", "SO2", "NH3", "Ozone", "Benzene")
+series[['DateTime']] <- as.POSIXct(series[['DateTime']],
+                                   format = "%Y-%m-%d %H:%M:%S")
+
+```
+
+### NA data
+
+Out of the 86400 total observations, 13028 are missing.
+
+We can see a breakup of the missing data.
+
+```{r}
+#| echo: false
+#| fig-cap: "NA values in dataset"
+df = as.data.frame(colSums(is.na(series)))
+colnames(df) = "value"
+
+
+ggplot(df, aes(x = rownames(df), y = value, fill = "red")) + 
+  geom_bar(stat = "identity")+
+  labs(x = "Pollutant", y = "NA values")+
+  geom_hline(yintercept = 8640, linetype = "dashed")+
+  scale_y_continuous(breaks = c(0, 2500, 5000, 7500, 8640),
+                     labels = c(0, 2500, 5000, 7500,"Total"))+
+  theme(legend.position = "none")
+
+
+```
+
+We can see that too many Benzene values (\>70%) are missing to interpolate, or predict with any degree of usefulness. Thus, we leave Benzene out of all subsequent analysis.
+
+Next, we review the occurrence of NA values by time:
+
+```{r}
+#| echo: false
+df2 <- as.data.frame(rowSums(is.na(series)))
+colnames(df2) <- "values"
+ggplot(df2, aes( x = values)) +
+  geom_histogram()
+
+```
+
+On closer inspection, one day (5th March) had no recorded readings of any of the pollutants.
+
+# Exploratory analysis
+
+## Weekly trajectory
+
+We can inspect the weekly trajectory of a few of to affirm our hypothesis of seasonal daily behaviour.
+
+```{r fig.width=6, fig.height=10}
+#| echo: false
+
+par(mar = c(1.5, 1, 1.5, 1) + 0.1 ,pin = c(2.2, 1.2), mfrow = c(1,2), cex.axis = 0.5, tcl = -0.2, mgp = c(1,0.15,0))
+day <- series[1537:2208,]
+for(i in 2:6){
+  plot(x = ymd_hms(data$From[1537:2208]), y = as.numeric(day[,i]), type = "l", xlab = "", col = "orange" , ylab = "")
+  title(ylab = list(colnames(day)[i], cex = 0.75), xlab = list("Time", cex = 0.75))
+}
+```
+
+## Sampled day
+
+Let us first explore what a (not randomly) sampled daily trajectory of the levels of various pollutants looks like. We have selected 17 February 2023, after visual inspection as it seemed to have nearly complete observations.
+
+```{r, fig.width=6, fig.height=10}
+#| echo: false
+
+par(mar = c(1.5, 1, 1.5, 1) + 0.1 ,pin = c(2.2, 1.2), mfrow = c(1,2), cex.axis = 0.5, tcl = -0.2, mgp = c(1,0.15,0))
+day <- series[1537:1632,]
+for(i in 7:11){
+  plot(x = ymd_hms(data$From[1537:1632]), y = as.numeric(day[,i]), type = "l", xlab = "", col = "orange" , ylab = "")
+  title(ylab = list(colnames(day)[i], cex = 0.75), xlab = list("Time", cex = 0.75))
+}
+
+```
+
+We need to bear in mind that since these plots are of a single day, they are not necessarily representative of all days in our dataset. However
+
+## Cross sectional analysis
+
+### Correlations
+
+Now, let us compute and visualize the correlations between levels of various pollutants.
+
+```{r}
+#| echo: false
+#| fig-cap: "Correlations between various pollutant amounts"
+
+cor_mtx <- cor(series[2:11], use = "pairwise.complete.obs")
+ggcorrplot(cor_mtx, "circle", "lower", colors = c("red", "white", "blue"))
+```
+
+We can observe that there is a moderate level of positive correlation between some pollutants.
+
+Exceptions to this observation are CO, Ozone, SO2 and NH3, which are negatively correlated (or uncorrelated) with most other pollutants.
+
+### AQI
+
+We also a devise a function to compute the AQI. However, since it has a relatively long context window (24 hours or 8 hours), AQI is relatively less sensitive to instantaneous changes in .
+
+# Interpolation
+
+```{r}
+#| echo: false
+#| output: false
+
+linear_int_df <- data.frame(matrix(0,8640,10))
+linear_int_df[1] <- series[1]
+
+for(i in 2:10){
+  new <- na_interpolation(series[i], option = "linear")
+  linear_int_df[,i] <- new
+}
+
+linterpol <-  data.frame(matrix(NA,8640,10))
+linterpol[1] <- series[1]
+colnames(linterpol) <- c("DateTime","PM10", "PM2.5", "NO", "NO2", "NOx", "CO", "SO2", "NH3", "Ozone")
+colnames(linear_int_df) <- c("DateTime","PM10", "PM2.5", "NO", "NO2", "NOx", "CO", "SO2", "NH3", "Ozone")
+
+
+for(i in 2:10){
+  for(j in 1:8640){
+    if(j > 1 & j< 8640) k = is.na(series[j,i])+ is.na(series[j-1,i])+ is.na(series[j+1,i]) +0
+    else if(j ==1) k = is.na(series[j,i]) + is.na(series[j+1,i]) +0
+    else if(j ==8640) k = is.na(series[j,i]) + is.na(series[j-1,i]) +0
+    
+    if(k) linterpol[j,i] <- linear_int_df[j,i]
+  }
+}
+```
+
+```{r}
+#| echo: false
+#| output: false
+
+cubic_int_df <- data.frame(matrix(0,8640,10))
+cubic_int_df[1] <- series[1]
+
+for(i in 2:10){
+  new <- na_interpolation(series[i], option = "spline")
+  cubic_int_df[,i] <- new
+}
+
+cinterpol <-  data.frame(matrix(NA,8640,10))
+cinterpol[1] <- series[1]
+colnames(cinterpol) <- c("DateTime","PM10", "PM2.5", "NO", "NO2", "NOx", "CO", "SO2", "NH3", "Ozone")
+colnames(cubic_int_df) <- c("DateTime","PM10", "PM2.5", "NO", "NO2", "NOx", "CO", "SO2", "NH3", "Ozone")
+for(i in 2:10){
+  for(j in 1:8640){
+    if(j > 1 & j< 8640) k = is.na(series[j,i])+ is.na(series[j-1,i])+ is.na(series[j+1,i]) +0
+    else if(j ==1) k = is.na(series[j,i]) + is.na(series[j+1,i]) +0
+    else if(j ==8640) k = is.na(series[j,i]) + is.na(series[j-1,i]) +0
+    
+    if(k) cinterpol[j,i] <- max(0, cubic_int_df[j,i])
+  }
+}
+
+
+```
+
+In cubic spline interpolation, in many cases the interpolated value fell below zero, so this had to be normalized.
+
+# Modelling
+
+## Evaluation
+
+### Data split
+
+```{r}
+#| echo : false
+#| output: false
+train <- cubic_int_df[1:6720,]
+test <- cubic_int_df[6721:8640,]
+```
+
+To evaluate our models without bias, we will bifurcate the data into two sets, one each for training and testing. The training set comprises the data from 1 February to 11 April (70 days) while the test set comprises data from 12 April to 2 May (20 days).
+
+We
+
+Trend
+
+Seasonality
+
+## Stationarity
+
+We apply the Augmented Dickey-Fuller test to check whether each of the time series are stationary. All of them have a p-value of less than 0.01 hence we go with the alternative hypothesis; i.e. the series are all stationary.
+
+```{r}
+#| echo: false
+#| output: false
+for(i in 2:10){
+  print(paste("Stationarity test for", colnames(cinterpol)[i] ,"series" ))
+  x = adf.test(train[[i]])
+  print(x)
+  print(paste("p value less than", x$p.value, "hence stationary series."))
+  print("")
+  print("")
+}
+
+```
+
+## ACFs and PACFs
+
+For most pollutants, we see a cyclical pattern in the ACFs, suggesting that an ARIMA model may be a good fit. In many of these, recorded values of nearly 1 day previously .
+
+```{r fig.width=8, fig.height=5}
+#| echo: false
+ts_list=list()
+for(i in 2:10){
+  ts_list[[i]] <- ts(cubic_int_df[[i]], frequency = 96)
+}
+par(mfrow = c(2,1))
+for(i in 2:5){
+  ts = ts_list[[i]]
+
+  acf(ts, 192, main = paste("ACF for", colnames(series)[i]), panel.first = grid ())
+  pacf(ts, 192, main = paste("PACF for", colnames(series)[i]), panel.first = grid ())
+}
+```
+
+### Model 1: Auto ARIMA
+
+We use Auto ARIMA, which is a tool that searches the hyperparameter space of ARIMA models and chooses the best valued model according to AIC.
+
+```{r}
+
+
+```
+
+Many of the pollutants were giving a flat line in the ARIMA model
+
+Some techniques I tried to improve fit were to use only the past 1 or 2 months data, but these yielded worse results than the full dataset.
+
+Residual analysis
+
+# Conclusion
+
+Using these relatively simple searching tools,
+
+# References
+
+Choudhary, Arti & Kumar, Pradeep. (2022). Estimation of Air Pollutants using Time Series Model at Coalfield Site of India. Proceedings of The International Conference on Data Science and Official Statistics. 2021. 10.34123/icdsos.v2021i1.59.
