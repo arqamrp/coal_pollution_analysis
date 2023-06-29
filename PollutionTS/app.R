@@ -3,6 +3,7 @@ library(ggplot2)
 library(forecast)
 library(smooth)
 
+
 load("coalfield.Rdata")
 
 ui <- fluidPage(
@@ -12,7 +13,8 @@ ui <- fluidPage(
     sidebarLayout(
         sidebarPanel(
           
-          
+          tags$a(href = "https://github.com/arqamrp/coal_pollution_analysis/tree/main/PollutionTS", "Source code"),
+          tags$h1(),
           selectInput(
             "mode",
             "Display",

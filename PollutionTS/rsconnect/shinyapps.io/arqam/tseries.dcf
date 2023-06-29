@@ -5,9 +5,9 @@ account: arqam
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9379031
-bundleId: 7398410
+bundleId: 7398561
 url: https://arqam.shinyapps.io/tseries/
-when: 1687967428.344
-lastSyncTime: 1687967428.34405
+when: 1687969610.38507
+lastSyncTime: 1687969610.38514
 asMultiple: FALSE
 asStatic: FALSE

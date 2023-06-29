@@ -1,7 +1,13 @@
 ---
 title: "Time Series Analysis of Coalfield Pollutant Data"
 author: "Arqam Patel"
-format: pdf
+format:
+  pdf:
+    toc: true
+    toc-depth: 2
+    include-in-header:
+      text: |
+        \addtokomafont{disposition}{\rmfamily}
 editor: visual
 ---
 
@@ -16,18 +22,20 @@ library(ggcorrplot)
 library(lubridate)
 library(imputeTS)
 library(tseries)
+library(psych)
 ```
 
 # Introduction
 
-Due to the number of variables we're dealing with simultaneously, a majority of the analysis was done with the help of this [dashboard app](https://arqam.shinyapps.io/tseries/) that I coded from scratch using an R library called RShiny.
+Despite a push towards green energy, coal is still one of the top sources of energy in India. Indian coal production is dependent on open-pit mining, and this is a cause of significant air pollution due to release of various particulate and gaseous pollutants. I undertake an analysis of the regular readings of various pollutants as time series as part of the assignment of the course EE798 (Foundations of Statistical Inference and Automation), instructed by Dr. Tushar Sandhan.
+
+Due to the number of variables we're dealing with simultaneously, a majority of the analysis was done with the help of this [dashboard app](https://arqam.shinyapps.io/tseries/) that I coded from scratch using an R library called RShiny. It contains detailed plots about the interpolation. forecasting and other analysis techniques used and is a very useful companion to this report.
 
 # Dataset description
 
-The given dataset contains 8640 observations each of the levels of 10 pollutants, taken at intervals of 15 minutes from 1 February to 2 May 2023 (i.e. 90 days, 96 observations each).
+The given dataset contains 8640 observations each of the levels of 10 pollutants, taken at intervals of 15 minutes from 1 February to 2 May 2023 (i.e. 90 days, 96 observations each). We can view the first few rows of the dataset:
 
 ```{r}
-#| output: false
 #| echo: false
 
 data <- as.data.frame(read.csv("/Users/arqam/projects/coal_pollution_analysis/dataset.csv"))
@@ -37,9 +45,23 @@ colnames(series) <- c("DateTime","PM10", "PM2.5", "NO", "NO2", "NOx", "CO", "SO2
 series[['DateTime']] <- as.POSIXct(series[['DateTime']],
                                    format = "%Y-%m-%d %H:%M:%S")
 
+
+head(series)
+
 ```
 
-### NA data
+## Descriptive statistics
+
+Using the `summary()` function in R, we can generate a quick overview of the distribution of the various variables.
+
+```{r}
+#| echo: false
+
+describe(series[2:11])[3:11]
+
+```
+
+## NA data
 
 Out of the 86400 total observations, 13028 are missing.
 
@@ -65,7 +87,7 @@ ggplot(df, aes(x = rownames(df), y = value, fill = "red")) +
 
 We can see that too many Benzene values (\>70%) are missing to interpolate, or predict with any degree of usefulness. Thus, we leave Benzene out of all subsequent analysis.
 
-Next, we review the occurrence of NA values by time:
+Next, we review the occurrence of NA values by time (i.e. how many days had insufficient data for x pollutants):
 
 ```{r}
 #| echo: false
@@ -82,14 +104,14 @@ On closer inspection, one day (5th March) had no recorded readings of any of the
 
 ## Weekly trajectory
 
-We can inspect the weekly trajectory of a few of to affirm our hypothesis of seasonal daily behaviour.
+We can inspect the weekly trajectory of a few of to affirm our hypothesis of seasonal daily behaviour. We can see that the behaviour is somewhat cyclic but also displays significant variation.
 
 ```{r fig.width=6, fig.height=10}
 #| echo: false
 
 par(mar = c(1.5, 1, 1.5, 1) + 0.1 ,pin = c(2.2, 1.2), mfrow = c(1,2), cex.axis = 0.5, tcl = -0.2, mgp = c(1,0.15,0))
 day <- series[1537:2208,]
-for(i in 2:6){
+for(i in 2:5){
   plot(x = ymd_hms(data$From[1537:2208]), y = as.numeric(day[,i]), type = "l", xlab = "", col = "orange" , ylab = "")
   title(ylab = list(colnames(day)[i], cex = 0.75), xlab = list("Time", cex = 0.75))
 }
@@ -104,14 +126,14 @@ Let us first explore what a (not randomly) sampled daily trajectory of the level
 
 par(mar = c(1.5, 1, 1.5, 1) + 0.1 ,pin = c(2.2, 1.2), mfrow = c(1,2), cex.axis = 0.5, tcl = -0.2, mgp = c(1,0.15,0))
 day <- series[1537:1632,]
-for(i in 7:11){
+for(i in 7:10){
   plot(x = ymd_hms(data$From[1537:1632]), y = as.numeric(day[,i]), type = "l", xlab = "", col = "orange" , ylab = "")
   title(ylab = list(colnames(day)[i], cex = 0.75), xlab = list("Time", cex = 0.75))
 }
 
 ```
 
-We need to bear in mind that since these plots are of a single day, they are not necessarily representative of all days in our dataset. However
+We need to bear in mind that since these plots are of a single day, they are not necessarily representative of all days in our dataset. 
 
 ## Cross sectional analysis
 
@@ -133,9 +155,17 @@ Exceptions to this observation are CO, Ozone, SO2 and NH3, which are negatively 
 
 ### AQI
 
-We also a devise a function to compute the AQI. However, since it has a relatively long context window (24 hours or 8 hours), AQI is relatively less sensitive to instantaneous changes in .
+We also a devise a function to compute the AQI. However, since it has a relatively long context window (24 hours or 8 hours), AQI is relatively less sensitive to instantaneous changes and thus cannot be used as a single variable proxy for pollution at a time instant.
+
+![](photos/AQI.png){fig-align="center" width="600"}
 
 # Interpolation
+
+We tested two kinds of techniques for interpolation: linear, and cubic spline. Upon inspection, cubic spline seemed to better fit NA values in a few cases so we used it. We used the `na_interpolation()` function from the `imputeTS` library in R.
+
+![](photos/cubic_interp.png)
+
+![](photos/linear_interp.png)
 
 ```{r}
 #| echo: false
@@ -192,31 +222,16 @@ for(i in 2:10){
   }
 }
 
+train <- cubic_int_df[1:8448,]
+test <- cubic_int_df[8449:8640,]
+
 
 ```
 
 In cubic spline interpolation, in many cases the interpolated value fell below zero, so this had to be normalized.
 
-# Modelling
-
-## Evaluation
-
-### Data split
-
-```{r}
-#| echo : false
-#| output: false
-train <- cubic_int_df[1:6720,]
-test <- cubic_int_df[6721:8640,]
-```
-
-To evaluate our models without bias, we will bifurcate the data into two sets, one each for training and testing. The training set comprises the data from 1 February to 11 April (70 days) while the test set comprises data from 12 April to 2 May (20 days).
-
-We
-
-Trend
-
-Seasonality
+# Characteristics of time series
+From visual inspection, we can conclude that there is no clear trend, but the time series display seasonality with a period of 1 day.
 
 ## Stationarity
 
@@ -224,13 +239,11 @@ We apply the Augmented Dickey-Fuller test to check whether each of the time seri
 
 ```{r}
 #| echo: false
-#| output: false
-for(i in 2:10){
+for(i in 2:4){
   print(paste("Stationarity test for", colnames(cinterpol)[i] ,"series" ))
   x = adf.test(train[[i]])
   print(x)
   print(paste("p value less than", x$p.value, "hence stationary series."))
-  print("")
   print("")
 }
 
@@ -238,7 +251,7 @@ for(i in 2:10){
 
 ## ACFs and PACFs
 
-For most pollutants, we see a cyclical pattern in the ACFs, suggesting that an ARIMA model may be a good fit. In many of these, recorded values of nearly 1 day previously .
+For most pollutants, we see a cyclical pattern in the ACFs, suggesting that an ARIMA model may be worth a try. In many of these, recorded values of nearly 1 day previously show significant PACF, showing that there is some recurrence-type relationship.
 
 ```{r fig.width=8, fig.height=5}
 #| echo: false
@@ -255,24 +268,59 @@ for(i in 2:5){
 }
 ```
 
+# Forecasting
+
+## Evaluation
+
+### Data split
+
+To evaluate our models without bias, we will bifurcate the data into two sets, one each for training and testing. The training set comprises the data from 1 February to 29 April (88 days) while the test set comprises data from 30 April and 1 May (2 days). Thus, we are essentially targeting a two day forecast window.
+
+## Modelling techniques
+
+With each of the modelling tools, we use the very useful `forecasts` package in R.
+
 ### Model 1: Auto ARIMA
 
 We use Auto ARIMA, which is a tool that searches the hyperparameter space of ARIMA models and chooses the best valued model according to AIC.
 
-```{r}
+Many of the pollutants were giving a flat line in the ARIMA model. Some techniques I tried to improve fit were to use only the past 1 or 2 months data, but these yielded worse results than the full dataset. So, while useful as a benchmark, it only yielded good results with Ozone.
+We use the `auto.arima` tool from the `tseries` package in R.
 
+### Model 2: Auto Complex Exponential Smoothing
 
-```
+Complex Exponential Smoothing is a variant of the Exponential Smoothing method that is designed to handle time series data with complex patterns, such as seasonality and trend. It uses a combination of smoothing parameters and complex exponential smoothing equations to forecast future values. 
+We use the `auto.ces` tool from the `smooth` package in R. This was the best performing technique, predicting the trajectory of a majority of the pollutants.
 
-Many of the pollutants were giving a flat line in the ARIMA model
+### Model 3: Auto Multiple Seasonal ARIMA
 
-Some techniques I tried to improve fit were to use only the past 1 or 2 months data, but these yielded worse results than the full dataset.
+Multiple Seasonal State Space ARIMA (MS ARIMA or MSSS-ARIMA) is an advanced time series forecasting model that extends the capabilities of traditional ARIMA models to handle multiple seasonal patterns. It is particularly useful for time series data that exhibit multiple seasonal cycles, such as daily, weekly, and yearly patterns
+We use the `auto.msarima` tool from the `smooth` package in R. MSARIMA proved much better than plain ARIMA models at predicting the time series.
 
-Residual analysis
+## Best models
+
+Here, we present the plots of the best fitting models out of the 3 options explored, for each pollutant. Out of all the pollutants, NOx was the most difficult to model, with all 3 architectures failing to get a good forecast.
+
+![CO(CES)](photos/models/CO.png){fig-align="center" width="470"}
+
+![NH3 (MSARIMA)](photos/models/NH3.png){fig-align="center" width="470"}
+
+![NO (CES)](photos/models/NO.png){fig-align="center" width="470"}
+
+![NO2 (CES)](photos/models/NO2.png){fig-align="center" width="470"}
+
+![NOx (MSARIMA)](photos/models/NOx.png){fig-align="center" width="470"}
+
+![Ozone (ARIMA)](photos/models/Ozone.png){fig-align="center" width="470"}
+
+![PM2.5 (CES)](photos/models/pm2.png){fig-align="center" width="470"}
+
+![SO2 (CES)](photos/models/SO2.png){fig-align="center" width="470"}
+
 
 # Conclusion
 
-Using these relatively simple searching tools,
+Using these relatively simple searching tools, we were able to generate relatively good predictive models for the pollutants, for a couple of days. Such modelling techniques will enable us to forecast as well as accurately interpolate NA values. We can ensemble these tools to predict the pollutants more accurately in the future.
 
 # References
 
